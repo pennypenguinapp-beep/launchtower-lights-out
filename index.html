@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Lights Out — LaunchTower</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b23; --panel2:#1d2430; --line:#2a3342;
+    --text:#e8edf5; --dim:#8b96a8; --accent:#ffd166; --accent2:#4cc9f0;
+    --good:#57cc99; --bad:#f25c54;
+  }
+  *{box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:'Segoe UI', system-ui, -apple-system, sans-serif;
+    display:flex; flex-direction:column; align-items:center;
+    min-height:100vh; padding:16px 12px 8px;
+  }
+  header{ text-align:center; margin-bottom:10px; }
+  h1{
+    font-size:clamp(20px,5vw,28px); letter-spacing:2px; font-weight:700;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .sub{ color:var(--dim); font-size:12px; margin-top:4px; }
+  .hud{
+    display:flex; gap:8px; flex-wrap:wrap; justify-content:center;
+    margin:10px 0; width:100%; max-width:420px;
+  }
+  .stat{
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:8px 12px; min-width:78px; text-align:center; flex:1;
+  }
+  .stat .lbl{ font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); }
+  .stat .val{ font-size:18px; font-weight:700; margin-top:2px; }
+  .stat .val.best{ color:var(--good); }
+  .stat .val.hint{ color:var(--accent); }
+  .board-wrap{
+    position:relative; width:min(88vw,380px); aspect-ratio:1/1;
+    background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:10px; box-shadow:0 8px 30px rgba(0,0,0,.45);
+  }
+  canvas{ width:100%; height:100%; display:block; border-radius:8px; touch-action:manipulation; }
+  .controls{ display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; justify-content:center; width:100%; max-width:420px; }
+  button{
+    background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:10px; padding:10px 14px; font-size:13px; font-weight:600;
+    cursor:pointer; transition:transform .08s, background .15s, border-color .15s;
+    flex:1; min-width:90px;
+  }
+  button:hover{ background:#232c3b; border-color:#3a4658; }
+  button:active{ transform:scale(.97); }
+  button.primary{ background:linear-gradient(90deg,#2b5f6e,#1f4a63); border-color:#3d7a8c; }
+  button:disabled{ opacity:.45; cursor:not-allowed; }
+  .msg{
+    min-height:22px; margin-top:10px; font-size:13px; color:var(--dim);
+    text-align:center; max-width:420px;
+  }
+  .msg.win{ color:var(--good); font-weight:700; }
+  .msg.hintmsg{ color:var(--accent); }
+  .overlay{
+    position:absolute; inset:10px; border-radius:8px; display:none;
+    align-items:center; justify-content:center; flex-direction:column; gap:10px;
+    background:rgba(10,13,18,.82); backdrop-filter:blur(2px); text-align:center; padding:20px;
+  }
+  .overlay.show{ display:flex; }
+  .overlay h2{ font-size:26px; color:var(--good); }
+  .overlay p{ color:var(--text); font-size:14px; }
+  .overlay .newbest{ color:var(--accent); font-weight:700; font-size:15px; }
+  footer{ margin-top:auto; padding-top:18px; text-align:center; }
+  footer a{ color:var(--dim); font-size:11px; text-decoration:none; letter-spacing:.5px; }
+  footer a:hover{ color:var(--accent2); }
+</style>
+</head>
+<body>
+<header>
+  <h1>LIGHTS OUT</h1>
+  <div class="sub">Tap a light to toggle it and its neighbors. Turn them all off.</div>
+</header>
+
+<div class="hud">
+  <div class="stat"><div class="lbl">Level</div><div class="val" id="level">1</div></div>
+  <div class="stat"><div class="lbl">Moves</div><div class="val" id="moves">0</div></div>
+  <div class="stat"><div class="lbl">Best</div><div class="val best" id="best">—</div></div>
+  <div class="stat"><div class="lbl">Hints</div><div class="val hint" id="hints">3</div></div>
+</div>
+
+<div class="board-wrap">
+  <canvas id="board"></canvas>
+  <div class="overlay" id="overlay">
+    <h2 id="ovTitle">Solved!</h2>
+    <p id="ovText"></p>
+    <div class="newbest" id="ovBest"></div>
+    <button class="primary" id="ovBtn">Next Level</button>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="btnHint">💡 Hint</button>
+  <button id="btnReset">↺ Reset</button>
+  <button id="btnNext" class="primary">Next →</button>
+</div>
+
+<div class="msg" id="msg">Level 1 of 40 — good luck!</div>
+
+<footer>
+  <a href="https://pennypenguinapp-beep.github.io/" target="_blank" rel="noopener">More free tools &amp; games by LaunchTower →</a>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+  var N = 5, TOTAL_LEVELS = 40, HINTS_PER_LEVEL = 3;
+  var canvas = document.getElementById('board');
+  var ctx = canvas.getContext('2d');
+  var level = 1, moves = 0, hintsLeft = HINTS_PER_LEVEL;
+  var board = [], solution = [], solved = false, hintCell = -1, hintPulse = 0;
+  var STORAGE_KEY = 'launchtower_lightsout_best_v1';
+  var bestMap = loadBest();
+
+  // ---------- persistence ----------
+  function loadBest(){
+    try{ var raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : {}; }
+    catch(e){ return {}; }
+  }
+  function saveBest(){
+    try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(bestMap)); }catch(e){}
+  }
+
+  // ---------- level generation (always solvable) ----------
+  // Start from all-off, apply K random toggles -> board is solvable in <= K moves.
+  function toggle(b, x, y){
+    var dx = [0,0,0,-1,1], dy = [0,-1,1,0,0];
+    for(var i=0;i<5;i++){
+      var nx = x+dx[i], ny = y+dy[i];
+      if(nx>=0 && nx<N && ny>=0 && ny<N) b[ny][nx] ^= 1;
+    }
+  }
+  function randInt(n){ return Math.floor(Math.random()*n); }
+
+  function generateLevel(lvl){
+    // difficulty scales: 4..12 random toggles
+    var k = 4 + Math.min(8, Math.floor((lvl-1)/5));
+    var b = [], sol = [];
+    var guard = 0;
+    do{
+      b = []; for(var y2=0;y2<N;y2++) b.push([0,0,0,0,0]);
+      sol = [];
+      var used = {};
+      for(var i=0;i<k;i++){
+        var x = randInt(N), y = randInt(N);
+        var key = x+','+y;
+        if(used[key]){ used[key]=false; } else { used[key]=true; sol.push([x,y]); }
+      }
+      sol.forEach(function(c){ toggle(b, c[0], c[1]); });
+      guard++;
+    } while(countOn(b) < 3 && guard < 50); // ensure a visible puzzle
+    solution = sol;
+    board = b;
+  }
+
+  function countOn(b){
+    var c=0;
+    for(var y=0;y<N;y++) for(var x=0;x<N;x++) c += b[y][x];
+    return c;
+  }
+  function allOff(b){ return countOn(b)===0; }
+
+  // ---------- hint: find a cell that is part of a minimal solution ----------
+  // Solve via linear algebra over GF(2) to get one solution set, then pick a cell
+  // whose toggle reduces the current board toward solved.
+  function solveBoard(b){
+    // Build matrix: 25x25, column j = effect of toggling cell j
+    var n = N*N;
+    var M = [];
+    for(var j=0;j<n;j++){
+      var row = [];
+      var x = j%N, y = Math.floor(j/N);
+      var dx=[0,0,0,-1,1], dy=[0,-1,1,0,0];
+      for(var i=0;i<n;i++){
+        var cx=i%N, cy=Math.floor(i/N);
+        var on=false;
+        for(var d=0;d<5;d++){ if(cx===x+dx[d] && cy===y+dy[d]){ on=true; break; } }
+        row.push(on?1:0);
+      }
+      M.push(row);
+    }
+    // Gaussian elimination with column tracking
+    var aug = M.map(function(r){ return r.slice(); });
+    var rhs = [];
+    for(var i=0;i<n;i++) rhs.push(b[Math.floor(i/N)][i%N]);
+    var pivotRow = [];
+    var rank = 0;
+    for(var col=0; col<n && rank<n; col++){
+      var piv = -1;
+      for(var r=rank;r<n;r++){ if(aug[r][col]===1){ piv=r; break; } }
+      if(piv===-1) continue;
+      var tmp = aug[rank]; aug[rank]=aug[piv]; aug[piv]=tmp;
+      var tr = rhs[rank]; rhs[rank]=rhs[piv]; rhs[piv]=tr;
+      for(var r2=0;r2<n;r2++){
+        if(r2!==rank && aug[r2][col]===1){
+          for(var c2=col;c2<n;c2++) aug[r2][c2] ^= aug[rank][c2];
+          rhs[r2] ^= rhs[rank];
+        }
+      }
+      pivotRow.push(col); rank++;
+    }
+    // check consistency
+    for(var r3=rank;r3<n;r3++){
+      var allZero=true;
+      for(var c3=0;c3<n;c3++) if(aug[r3][c3]===1) allZero=false;
+      if(allZero && rhs[r3]===1) return null; // unsolvable (shouldn't happen)
+    }
+    var sol = new Array(n).fill(0);
+    for(var p=0;p<rank;p++){ sol[pivotRow[p]] = rhs[p]; }
+    return sol;
+  }
+
+  function getHintCell(){
+    var sol = solveBoard(board);
+    if(!sol) return -1;
+    // prefer a cell that is ON (toggling an ON cell feels natural)
+    var candidates = [];
+    for(var i=0;i<N*N;i++){
+      if(sol[i]===1){
+        var x=i%N, y=Math.floor(i/N);
+        candidates.push({i:i, on:board[y][x]});
+      }
+    }
+    if(candidates.length===0) return -1;
+    candidates.sort(function(a,b){ return (b.on-a.on); });
+    return candidates[0].i;
+  }
+
+  // ---------- rendering ----------
+  var cellSize=0, pad=0, dpr=1;
+  function resize(){
+    var rect = canvas.parentElement.getBoundingClientRect();
+    var size = Math.max(200, rect.width - 20); // padding
+    dpr = window.devicePixelRatio || 1;
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    pad = 6;
+    cellSize = (size - pad*2) / N;
+    draw();
+  }
+
+  function draw(){
+    var size = canvas.width / dpr;
+    ctx.clearRect(0,0,size,size);
+    // background
+    ctx.fillStyle = '#0b0e13';
+    ctx.fillRect(0,0,size,size);
+    for(var y=0;y<N;y++){
+      for(var x=0;x<N;x++){
+        var px = pad + x*cellSize, py = pad + y*cellSize;
+        var on = board[y][x]===1;
+        var isHint = (hintCell===y*N+x);
+        // cell base
+        ctx.fillStyle = on ? '#1a2230' : '#11151c';
+        roundRect(px+2, py+2, cellSize-4, cellSize-4, 6);
+        ctx.fill();
+        // light
+        var r = cellSize*0.30;
+        var cx = px+cellSize/2, cy = py+cellSize/2;
+        if(on){
+          var g = ctx.createRadialGradient(cx,cy,2,cx,cy,r*1.9);
+          g.addColorStop(0,'#fff3c4');
+          g.addColorStop(0.5,'#ffd166');
+          g.addColorStop(1,'rgba(255,209,102,0)');
+          ctx.fillStyle = g;
+          ctx.beginPath(); ctx.arc(cx,cy,r*1.9,0,Math.PI*2); ctx.fill();
+          ctx.fillStyle = '#ffe9a8';
+          ctx.beginPath(); ctx.arc(cx,cy,r*0.85,0,Math.PI*2); ctx.fill();
+        } else {
+          ctx.fillStyle = '#2a3342';
+          ctx.beginPath(); ctx.arc(cx,cy,r*0.8,0,Math.PI*2); ctx.fill();
+        }
+        if(isHint){
+          var pulse = 0.5 + 0.5*Math.sin(hintPulse);
+          ctx.strokeStyle = 'rgba(76,201,240,'+(0.4+0.6*pulse)+')';
+          ctx.lineWidth = 3;
+          roundRect(px+3, py+3, cellSize-6, cellSize-6, 6);
+          ctx.stroke();
+        }
+      }
+    }
+  }
+  function roundRect(x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+  }
+
+  // ---------- game flow ----------
+  function newLevel(lvl){
+    level = lvl;
+    moves = 0;
+    hintsLeft = HINTS_PER_LEVEL;
+    solved = false;
+    hintCell = -1;
+    generateLevel(level);
+    hideOverlay();
+    updateHUD();
+    setMsg('Level '+level+' of '+TOTAL_LEVELS+' — good luck!', '');
+    draw();
+  }
+
+  function tapCell(x,y){
+    if(solved) return;
+    toggle(board, x, y);
+    moves++;
+    hintCell = -1;
+    updateHUD();
+    draw();
+    if(allOff(board)) win();
+  }
+
+  function win(){
+    solved = true;
+    var best = bestMap[level];
+    var isNew = (best===undefined || moves < best);
+    if(isNew){ bestMap[level] = moves; saveBest(); }
+    updateHUD();
+    var title = 'Solved!';
+    var text = 'Level '+level+' cleared in '+moves+' moves.';
+    var bestTxt = isNew ? '★ New best: '+moves+' moves' : 'Best: '+(best!==undefined?best:'—')+' moves';
+    if(level >= TOTAL_LEVELS){
+      title = '🏆 All 40 levels!';
+      text = 'You finished the whole set in '+moves+' moves on the final level. Incredible!';
+      document.getElementById('ovBtn').textContent = 'Play Again';
+    } else {
+      document.getElementById('ovBtn').textContent = 'Next Level';
+    }
+    showOverlay(title, text, bestTxt);
+  }
+
+  function useHint(){
+    if(solved || hintsLeft<=0) return;
+    var c = getHintCell();
+    if(c===-1){ setMsg('No hint available — try resetting.', ''); return; }
+    hintsLeft--;
+    hintCell = c;
+    hintPulse = 0;
+    updateHUD();
+    setMsg('Hint: tap the glowing cell.', 'hintmsg');
+    animateHint();
+  }
+
+  var hintAnim = null;
+  function animateHint(){
+    if(hintAnim) cancelAnimationFrame(hintAnim);
+    var t0 = performance.now();
+    function step(t){
+      hintPulse = (t - t0)/220;
+      draw();
+      if(hintCell!==-1 && (t-t0)<2600) hintAnim = requestAnimationFrame(step);
+      else { hintCell=-1; draw(); }
+    }
+    hintAnim = requestAnimationFrame(step);
+  }
+
+  // ---------- HUD / UI ----------
+  function updateHUD(){
+    document.getElementById('level').textContent = level;
+    document.getElementById('moves').textContent = moves;
+    var b = bestMap[level];
+    document.getElementById('best').textContent = (b!==undefined)?b:'—';
+    document.getElementById('hints').textContent = hintsLeft;
+    document.getElementById('btnHint').disabled = (solved || hintsLeft<=0);
+  }
+  function setMsg(t, cls){
+    var el = document.getElementById('msg');
+    el.textContent = t;
+    el.className = 'msg' + (cls?(' '+cls):'');
+  }
+  function showOverlay(title, text, best){
+    document.getElementById('ovTitle').textContent = title;
+    document.getElementById('ovText').textContent = text;
+    document.getElementById('ovBest').textContent = best||'';
+    document.getElementById('overlay').classList.add('show');
+  }
+  function hideOverlay(){
+    document.getElementById('overlay').classList.remove('show');
+  }
+
+  // ---------- input ----------
+  function cellFromEvent(e){
+    var rect = canvas.getBoundingClientRect();
+    var cx = (e.clientX - rect.left);
+    var cy = (e.clientY - rect.top);
+    var x = Math.floor((cx - pad)/cellSize);
+    var y = Math.floor((cy - pad)/cellSize);
+    if(x<0||x>=N||y<0||y>=N) return null;
+    return {x:x, y:y};
+  }
+  canvas.addEventListener('click', function(e){
+    var c = cellFromEvent(e);
+    if(c) tapCell(c.x, c.y);
+  });
+
+  document.getElementById('btnHint').addEventListener('click', useHint);
+  document.getElementById('btnReset').addEventListener('click', function(){
+    newLevel(level);
+  });
+  document.getElementById('btnNext').addEventListener('click', function(){
+    if(level < TOTAL_LEVELS) newLevel(level+1);
+    else newLevel(1);
+  });
+  document.getElementById('ovBtn').addEventListener('click', function(){
+    if(level < TOTAL_LEVELS) newLevel(level+1);
+    else newLevel(1);
+  });
+
+  window.addEventListener('resize', resize);
+
+  // ---------- boot ----------
+  newLevel(1);
+  resize();
+})();
+</script>
+</body>
+</html>
