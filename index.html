@@ -67,8 +67,14 @@
   }
   .overlay.show{ display:flex; }
   .overlay h2{ font-size:26px; color:var(--good); }
+  .overlay h2.start{ color:var(--accent); font-size:30px; letter-spacing:2px; }
   .overlay p{ color:var(--text); font-size:14px; }
+  .overlay .keys{ color:var(--dim); font-size:12px; margin-top:2px; }
   .overlay .newbest{ color:var(--accent); font-weight:700; font-size:15px; }
+  .overlay button.primary{ font-size:16px; padding:14px 34px; min-width:160px; }
+  .overlay .pbtns{ display:flex; gap:8px; margin-top:4px; }
+  .overlay .pbtns button{ min-width:110px; }
+  .overlay .hidden{ display:none !important; }
   footer{ margin-top:auto; padding-top:18px; text-align:center; }
   footer a{ color:var(--dim); font-size:11px; text-decoration:none; letter-spacing:.5px; }
   footer a:hover{ color:var(--accent2); }
@@ -314,14 +320,52 @@
   }
 
   function tapCell(x,y){
-    if(solved) return;
+    if(solved || paused) return;
     toggle(board, x, y);
     moves++;
     hintCell = -1;
+    sfxTap();
     updateHUD();
     draw();
     if(allOff(board)) win();
   }
+
+  // ---------- WebAudio sound cues (no audio files) ----------
+  var audioCtx = null;
+  function ac(){
+    if(!audioCtx){
+      try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){ return null; }
+    }
+    if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+  function tone(freq, dur, type, vol, when){
+    var a = ac(); if(!a) return;
+    var t0 = a.currentTime + (when||0);
+    var o = a.createOscillator(), g = a.createGain();
+    o.type = type||'sine'; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol||0.12, t0+0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+    o.connect(g); g.connect(a.destination);
+    o.start(t0); o.stop(t0+dur+0.05);
+  }
+  function sfxTap(){ tone(520, 0.08, 'triangle', 0.10); }
+  function sfxWin(){ tone(523.25, 0.12, 'sine', 0.14, 0); tone(659.25, 0.12, 'sine', 0.14, 0.10); tone(783.99, 0.22, 'sine', 0.16, 0.20); }
+  function sfxHint(){ tone(880, 0.10, 'sine', 0.08); }
+
+  // ---------- pause on tab hidden ----------
+  var paused = false;
+  function setPaused(p){
+    if(solved) return;
+    paused = p;
+    if(p) showOverlay('PAUSED', 'Switch back to this tab to keep playing.', '');
+    else hideOverlay();
+  }
+  document.addEventListener('visibilitychange', function(){
+    if(document.hidden) setPaused(true);
+    else if(paused) setPaused(false);
+  });
 
   function win(){
     solved = true;
@@ -339,6 +383,7 @@
     } else {
       document.getElementById('ovBtn').textContent = 'Next Level';
     }
+    sfxWin();
     showOverlay(title, text, bestTxt);
   }
 
@@ -349,6 +394,7 @@
     hintsLeft--;
     hintCell = c;
     hintPulse = 0;
+    sfxHint();
     updateHUD();
     setMsg('Hint: tap the glowing cell.', 'hintmsg');
     animateHint();
@@ -389,6 +435,9 @@
   }
   function hideOverlay(){
     document.getElementById('overlay').classList.remove('show');
+    document.getElementById('ovTitle').className = '';
+    var extra = document.getElementById('ovExtra');
+    if(extra) extra.classList.add('hidden');
   }
 
   // ---------- input ----------
@@ -404,6 +453,44 @@
   canvas.addEventListener('click', function(e){
     var c = cellFromEvent(e);
     if(c) tapCell(c.x, c.y);
+  });
+  canvas.addEventListener('touchstart', function(e){
+    if(e.cancelable) e.preventDefault();
+    var t = e.changedTouches && e.changedTouches[0];
+    if(!t) return;
+    var rect = canvas.getBoundingClientRect();
+    var cx = t.clientX - rect.left, cy = t.clientY - rect.top;
+    var x = Math.floor((cx - pad)/cellSize), y = Math.floor((cy - pad)/cellSize);
+    if(x>=0 && x<N && y>=0 && y<N) tapCell(x, y);
+  }, {passive:false});
+
+  // keyboard: arrows/WASD to move, Enter/Space to toggle, H hint, R reset, N next, Esc/P pause
+  var kx = 2, ky = 2, cursorOn = false;
+  function drawCursor(){
+    if(!cursorOn) return;
+    var px = pad + kx*cellSize, py = pad + ky*cellSize;
+    ctx.strokeStyle = 'rgba(76,201,240,0.9)';
+    ctx.lineWidth = 3;
+    roundRect(px+3, py+3, cellSize-6, cellSize-6, 6);
+    ctx.stroke();
+  }
+  function drawAll(){ draw(); if(cursorOn) drawCursor(); }
+  function keyToggle(){
+    if(solved || paused) return;
+    cursorOn = true;
+    tapCell(kx, ky);
+  }
+  window.addEventListener('keydown', function(e){
+    var k = e.key;
+    if(k==='ArrowUp'||k==='w'||k==='W'){ if(solved||paused) return; ky=(ky-1+N)%N; cursorOn=true; drawAll(); e.preventDefault(); }
+    else if(k==='ArrowDown'||k==='s'||k==='S'){ if(solved||paused) return; ky=(ky+1)%N; cursorOn=true; drawAll(); e.preventDefault(); }
+    else if(k==='ArrowLeft'||k==='a'||k==='A'){ if(solved||paused) return; kx=(kx-1+N)%N; cursorOn=true; drawAll(); e.preventDefault(); }
+    else if(k==='ArrowRight'||k==='d'||k==='D'){ if(solved||paused) return; kx=(kx+1)%N; cursorOn=true; drawAll(); e.preventDefault(); }
+    else if(k==='Enter'||k===' '){ keyToggle(); e.preventDefault(); }
+    else if(k==='h'||k==='H'){ useHint(); }
+    else if(k==='r'||k==='R'){ newLevel(level); }
+    else if(k==='n'||k==='N'){ if(level<TOTAL_LEVELS) newLevel(level+1); else newLevel(1); }
+    else if(k==='Escape'||k==='p'||k==='P'){ if(!solved) setPaused(!paused); }
   });
 
   document.getElementById('btnHint').addEventListener('click', useHint);
@@ -424,6 +511,28 @@
   // ---------- boot ----------
   newLevel(1);
   resize();
+  // start screen
+  (function(){
+    var ov = document.getElementById('overlay');
+    document.getElementById('ovTitle').textContent = 'LIGHTS OUT';
+    document.getElementById('ovTitle').className = 'start';
+    document.getElementById('ovText').textContent = 'Tap a light to toggle it and its neighbors — turn them all off.';
+    document.getElementById('ovBest').textContent = '';
+    var keys = document.createElement('div');
+    keys.className = 'keys';
+    keys.textContent = 'Mouse / touch / arrows + Enter · H hint · R reset · Esc pause';
+    document.getElementById('ovText').after(keys);
+    var btns = document.createElement('div');
+    btns.className = 'pbtns';
+    btns.id = 'ovExtra';
+    var resume = document.createElement('button');
+    resume.className = 'primary';
+    resume.textContent = '▶ Play';
+    resume.addEventListener('click', function(){ hideOverlay(); });
+    btns.appendChild(resume);
+    keys.after(btns);
+    ov.classList.add('show');
+  })();
 })();
 </script>
 </body>
